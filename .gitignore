@@ -1,0 +1,41 @@
+# IDE-related
+.idea
+.vscode
+.history
+
+# AWS
+.elasticbeanstalk/*
+!.elasticbeanstalk/*.cfg.yml
+!.elasticbeanstalk/*.global.yml
+
+# Front-end
+/dist
+node_modules
+
+# Local configs
+.env.*local
+config/apache-local.conf
+config/*-local.py
+config/build-summary.json
+
+# Local dev
+venv
+.npmrc
+.tox/
+
+# Data
+data/*
+
+# Compiled/optimized files
+.python-version
+__pycache__/
+
+# Temporary files
+tmp/
+.DS_Store
+*.log
+logs/
+*.gz
+.cache
+.pytest_cache/
+coverage
