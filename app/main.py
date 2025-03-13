@@ -24,6 +24,8 @@ ENHANCEMENTS, OR MODIFICATIONS.
 """
 
 #Imports
+import boto3
+import logging
 import os
 import streamlit as st
 import sys
@@ -31,96 +33,186 @@ import sys
 # Ensure the root folder is in the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from langchain.chains import ConversationalRetrievalChain
-from langchain_community.llms import Bedrock
-from langchain_community.retrievers import AmazonKnowledgeBasesRetriever
-from langchain.memory import ConversationBufferMemory
+from langchain.prompts import PromptTemplate
 from langchain_community.chat_message_histories import StreamlitChatMessageHistory
-from langchain.prompts.prompt import PromptTemplate
-from langchain.chains.conversational_retrieval.prompts import CONDENSE_QUESTION_PROMPT
+from langchain.chains import ConversationalRetrievalChain
+from langchain.memory import ConversationBufferMemory
+from langchain_aws import BedrockLLM, AmazonKnowledgeBasesRetriever
 from app.config_manager import ConfigManager
 
-# Initialize configurations
-ConfigManager.initialize()
-config = ConfigManager.config
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-#Configure streamlit app
-st.set_page_config(page_title="bCourses Support ChatBot")
-st.title("bCourses Support ChatBot")
+def assume_role(config):
+    # Assumes an IAM role and returns a boto3 session.
+    try:
+        session = boto3.Session(region_name=config["REGION"])
+        sts_client = session.client("sts")
+        assumed_role_object = sts_client.assume_role(
+            RoleArn=config["ROLE_ARN"],
+            RoleSessionName="AssumeRoleSession1"
+        )
+        credentials = assumed_role_object['Credentials']
+        return boto3.Session(
+            aws_access_key_id=credentials['AccessKeyId'],
+            aws_secret_access_key=credentials['SecretAccessKey'],
+            aws_session_token=credentials['SessionToken'],
+            region_name=config["REGION"]
+        )
+    except Exception as e:
+        st.error(f"AWS Authentication Error: {e}")
+        logger.error(f"AWS Authentication Error: {e}")
+        st.stop()
+        return None
 
-print(f' KB_NAME : {config["KB_NAME"]}')
+def initialize_retriever(session, config):
+    # Initializes the Amazon Knowledge Bases Retriever.
+    try:
+        return AmazonKnowledgeBasesRetriever(
+            knowledge_base_id=config["KB_NAME"],
+            retrieval_config={"vectorSearchConfiguration": {"numberOfResults": 4}},
+            region_name=config["REGION"],
+            client=session.client("bedrock-agent-runtime"),
+        )
+    except Exception as e:
+        st.error(f"Knowledge Base Retriever Error: {e}")
+        logger.error(f"Knowledge Base Retriever Error: {e}")
+        st.stop()
+        return None
 
-#Define the retriever
-retriever = AmazonKnowledgeBasesRetriever(
-    knowledge_base_id=config["KB_NAME"],
-    retrieval_config={"vectorSearchConfiguration": {"numberOfResults": 4}},
-    # credentials_profile_name=config["PROFILE_NAME"],
-    region_name=config["REGION"]
-)
+def initialize_llm(session, config):
+    # Initializes the Bedrock LLM.
+    try:
+        model_kwargs_claude = {
+            "temperature": 0,
+            "top_k": 10,
+            "max_tokens": 750,
+        }
+        return BedrockLLM(
+            model_id="anthropic.claude-instant-v1",
+            model_kwargs=model_kwargs_claude,
+            region_name=config["REGION"],
+            client=session.client("bedrock-runtime"),
+        )
+    except Exception as e:
+        st.error(f"Bedrock LLM Initialization Error: {e}")
+        logger.error(f"Bedrock LLM Initialization Error: {e}")
+        st.stop()
+        return None
 
-#Define model parameters
-model_kwargs_claude = {
-  "temperature" : 0,
-  "top_k" : 10,
-  "max_tokens_to_sample" : 750
-}
+def create_prompt_templates():
+    # Creates the prompt templates for the Conversational Retrieval Chain.
+    my_template = """
+    Human: 
+        You are a helpful and informative conversational assistant specialized in providing information about RTL Services from a knowledge base. 
+        Use the following context to answer the user's question. 
+        If you cannot find the answer within the provided context, politely inform the user that you do not have the information and suggest alternative resources if available.
+        When providing answers, always include the 'kb_url' and 'kb_number' metadata references for the answers provided. 
+        Only include references where the 'workflow_state' is 'published'.
+        Provide concise and accurate answers. If a question is ambiguous, ask for clarification.
 
-#Configure llm
-llm = Bedrock(
-    model_id="anthropic.claude-instant-v1", 
-    model_kwargs=model_kwargs_claude,
-    # credentials_profile_name=config["PROFILE_NAME"],
-    region_name=config["REGION"]
-  )
+    {context}
 
-#Set up message history
-msgs = StreamlitChatMessageHistory(key = "langchain_messages")
-memory = ConversationBufferMemory(chat_memory=msgs, memory_key='chat_history', output_key='answer', return_messages=True)
-if len(msgs.messages) == 0:
-  msgs.add_ai_message("Welcome to bCourse Support. How can I help you today?")
+    {chat_history}
 
-#Creating the template   
-my_template = """
-Human: 
-    You are a conversational assistant designed to help answer questions from a knowledge base. 
-    Use the following pieces of context to answer the question at the end. If you don't know the answer, just say that you don't know, don't try to make up an answer.
-    Keep the answer as concise as possible. 
+    Question: {question}
 
-{context}
+    Assistant:
+    """
 
-{chat_history}
+    prompt_template = PromptTemplate(
+        input_variables=['context', 'chat_history', 'question'],
+        template=my_template
+    )
 
-Question: {question}
+    CONDENSE_QUESTION_PROMPT = PromptTemplate.from_template("""
+    Given the following conversation and a follow up question, rephrase the follow up question to be a standalone question, in its original language.
 
-Assistant:
-"""
+    Chat History:
+    {chat_history}
 
-#configure prompt template
-prompt_template = PromptTemplate(
-  input_variables= ['context', 'chat_history', 'question'],
-  template= my_template
-)
+    Follow Up Input:
+    {question}
 
-#Configure the chain
-qa = ConversationalRetrievalChain.from_llm(
-  llm = llm,
-  retriever= retriever,
-  return_source_documents = True,
-  combine_docs_chain_kwargs= {"prompt" : prompt_template},
-  memory = memory,
-  condense_question_prompt= CONDENSE_QUESTION_PROMPT
-)
+    Standalone question:
+    """)
 
-#Render current messages from StreamlitChatMessageHistory
-for msg in msgs.messages:
-  st.chat_message(msg.type).write(msg.content)
+    return prompt_template, CONDENSE_QUESTION_PROMPT
 
-#If user inputs a new prompt, generate and draw a new response
-if prompt := st.chat_input():
-  st.chat_message("human").write(prompt)
+def initialize_chat_interface(qa, memory, msgs):
+    # Initializes and manages the Streamlit chat interface.
+    for msg in msgs.messages:
+        st.chat_message(msg.type).write(msg.content)
 
-  #Invoke the model
-  output = qa.invoke({'question' : prompt, 'chat_history' : memory.load_memory_variables({})})
-    
-  #display the output
-  st.chat_message("ai").write(output['answer'])  
+    if prompt := st.chat_input():
+        st.chat_message("human").write(prompt)
+        with st.spinner("Generating response..."):
+            try:
+                output = qa.invoke({'question': prompt, 'chat_history': memory.load_memory_variables({})})
+                st.chat_message("ai").write(output['answer'])
+                logger.info("Response generated successfully.")
+                if output['source_documents']:
+                    display_source_documents(output['source_documents'])
+            except Exception as e:
+                st.error(f"Error generating response: {e}")
+                logger.error(f"Error generating response: {e}")
+
+    if st.button("Clear Chat History"):
+        msgs.clear()
+        memory.clear()
+        logger.info("Chat history cleared.")
+        st.rerun()
+
+def display_source_documents(source_docs):
+    # Displays the source documents in the Streamlit app.
+    st.subheader("Source Documents")
+    for doc in source_docs:
+        st.write(f"Source: {doc.metadata.get('kb_url', 'N/A')}")
+        st.write(f"Number: {doc.metadata.get('kb_number', 'N/A')}")
+        st.write(doc.page_content)
+        st.write("---")
+
+def main():
+    # Main function to orchestrate the application.
+    ConfigManager.initialize()
+    config = ConfigManager.config
+
+    session = assume_role(config)
+    if session is None:
+        return
+
+    st.set_page_config(page_title="bCourses Support ChatBot")
+    st.title("RTL Services Support ChatBot")
+
+    msgs = StreamlitChatMessageHistory(key="langchain_messages")
+    memory = ConversationBufferMemory(
+        chat_memory=msgs, memory_key='chat_history', output_key='answer', return_messages=True
+    )
+    if len(msgs.messages) == 0:
+        msgs.add_ai_message("Welcome to RTL Service Support Bot. How can I help you today?")
+
+    retriever = initialize_retriever(session, config)
+    if retriever is None:
+        return
+
+    llm = initialize_llm(session, config)
+    if llm is None:
+        return
+
+    prompt_template, condense_question_prompt = create_prompt_templates()
+
+    qa = ConversationalRetrievalChain.from_llm(
+        llm=llm,
+        retriever=retriever,
+        return_source_documents=True,
+        combine_docs_chain_kwargs={"prompt": prompt_template},
+        memory=memory,
+        condense_question_prompt=condense_question_prompt,
+    )
+    logger.info("Conversational Retrieval Chain initialized successfully.")
+
+    initialize_chat_interface(qa, memory, msgs)
+
+if __name__ == "__main__":
+    main()
