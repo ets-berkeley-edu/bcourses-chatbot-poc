@@ -25,7 +25,7 @@ ENHANCEMENTS, OR MODIFICATIONS.
 
 
 class Config:
-    ROLE_NAME = "aws_role_arn"
+    ROLE_ARN = "aws_role_arn"
     REGION = "aws_region"
     KB_NAME = "knowledge_base_id"
     PROFILE_NAME = "aws profile"
