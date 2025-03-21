@@ -102,24 +102,9 @@ def initialize_llm(session, config):
         return None
 
 def create_prompt_templates():
-    # Creates the prompt templates for the Conversational Retrieval Chain.
-    my_template = """
-    Human: 
-        You are a helpful and informative conversational assistant specialized in providing information about RTL Services from a knowledge base. 
-        Use the following context to answer the user's question. 
-        If you cannot find the answer within the provided context, politely inform the user that you do not have the information and suggest alternative resources if available.
-        When providing answers, always include the 'kb_url' and 'kb_number' metadata references for the answers provided. 
-        Only include references where the 'workflow_state' is 'published'.
-        Provide concise and accurate answers. If a question is ambiguous, ask for clarification.
-
-    {context}
-
-    {chat_history}
-
-    Question: {question}
-
-    Assistant:
-    """
+    # Loads the prompt templates for the Conversational Retrieval Chain.
+    with open("templates/prompt.txt","r") as file:
+        my_template = file.read()
 
     prompt_template = PromptTemplate(
         input_variables=['context', 'chat_history', 'question'],
