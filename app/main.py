@@ -25,6 +25,7 @@ ENHANCEMENTS, OR MODIFICATIONS.
 
 #Imports
 import boto3
+import json
 import logging
 import os
 import streamlit as st
@@ -33,7 +34,7 @@ import sys
 # Ensure the root folder is in the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from langchain.prompts import PromptTemplate
+from langchain.prompts import FewShotPromptTemplate, PromptTemplate
 from langchain_community.chat_message_histories import StreamlitChatMessageHistory
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
@@ -102,13 +103,30 @@ def initialize_llm(session, config):
         return None
 
 def create_prompt_templates():
-    # Loads the prompt templates for the Conversational Retrieval Chain.
-    with open("templates/prompt.txt","r") as file:
-        my_template = file.read()
+    # Load the prompt templates for the Conversational Retrieval Chain.
+    with open("templates/prompt_prefix.txt","r") as file:
+        my_template_prefix = file.read()
 
-    prompt_template = PromptTemplate(
-        input_variables=['context', 'chat_history', 'question'],
-        template=my_template
+    with open("templates/prompt_suffix.txt","r") as file:
+        my_template_suffix = file.read()
+
+    # Load the few shot examples
+    with open("templates/few_shot_examples.json", "r") as file:
+        few_shot_examples = json.load(file)
+
+    example_template = """
+    Input: {input}
+    Output: {output}
+    """
+
+    example_prompt = PromptTemplate(input_variables=["input", "output"], template=example_template)
+
+    few_shot_prompt = FewShotPromptTemplate(
+        examples=few_shot_examples,
+        example_prompt=example_prompt,
+        prefix=my_template_prefix,
+        suffix=my_template_suffix,
+        input_variables=["context", "chat_history", "question"],
     )
 
     CONDENSE_QUESTION_PROMPT = PromptTemplate.from_template("""
@@ -123,7 +141,7 @@ def create_prompt_templates():
     Standalone question:
     """)
 
-    return prompt_template, CONDENSE_QUESTION_PROMPT
+    return few_shot_prompt, CONDENSE_QUESTION_PROMPT
 
 def initialize_chat_interface(qa, memory, msgs):
     # Initializes and manages the Streamlit chat interface.
@@ -185,13 +203,13 @@ def main():
     if llm is None:
         return
 
-    prompt_template, condense_question_prompt = create_prompt_templates()
+    few_shot_prompt, condense_question_prompt = create_prompt_templates()
 
     qa = ConversationalRetrievalChain.from_llm(
         llm=llm,
         retriever=retriever,
         return_source_documents=True,
-        combine_docs_chain_kwargs={"prompt": prompt_template},
+        combine_docs_chain_kwargs={"prompt": few_shot_prompt},
         memory=memory,
         condense_question_prompt=condense_question_prompt,
     )
