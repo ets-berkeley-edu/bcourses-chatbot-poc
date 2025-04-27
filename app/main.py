@@ -143,7 +143,7 @@ def create_prompt_templates():
 
     return few_shot_prompt, CONDENSE_QUESTION_PROMPT
 
-def initialize_chat_interface(qa, memory, msgs):
+def initialize_chat_interface(qa, memory, msgs, llm):
     # Initializes and manages the Streamlit chat interface.
     for msg in msgs.messages:
         st.chat_message(msg.type).write(msg.content)
@@ -152,7 +152,15 @@ def initialize_chat_interface(qa, memory, msgs):
         st.chat_message("human").write(prompt)
         with st.spinner("Generating response..."):
             try:
-                output = qa.invoke({'question': prompt, 'chat_history': memory.load_memory_variables({})})
+                # Process query intent
+                improved_prompt = process_query_intent(llm, prompt)
+                if improved_prompt != prompt:
+                    logger.info(f"Original query: '{prompt}' improved to: '{improved_prompt}'")
+                
+                output = qa.invoke({
+                    'question': improved_prompt, 
+                    'chat_history': memory.load_memory_variables({})
+                })
                 st.chat_message("ai").write(output['answer'])
                 logger.info("Response generated successfully.")
                 if output['source_documents']:
@@ -161,11 +169,13 @@ def initialize_chat_interface(qa, memory, msgs):
                 st.error(f"Error generating response: {e}")
                 logger.error(f"Error generating response: {e}")
 
-    if st.button("Clear Chat History"):
-        msgs.clear()
-        memory.clear()
-        logger.info("Chat history cleared.")
-        st.rerun()
+    # Only show clear button if there are messages beyond the initial welcome message
+    if len(msgs.messages) > 1:
+        if st.button("Clear Chat History"):
+            msgs.clear()
+            memory.clear()
+            logger.info("Chat history cleared.")
+            st.rerun()
 
 def display_source_documents(source_docs):
     # Displays the source documents in the Streamlit app.
@@ -175,6 +185,27 @@ def display_source_documents(source_docs):
         st.write(f"Number: {doc.metadata.get('kb_number', 'N/A')}")
         st.write(doc.page_content)
         st.write("---")
+
+def process_query_intent(llm, original_query):
+    """Processes and improves the original query by understanding its intent."""
+    intent_prompt = PromptTemplate.from_template("""
+    As an AI assistant with knowledge of instructional technology, improve the 
+    following question to make it clearer and more specific. 
+    If the question is already well-formed, return it unchanged.
+    If the question is unclear or poorly formed, rewrite it to be more precise 
+    while preserving its original intent.
+    
+    Original question: {query}
+    
+    Improved question:""")
+    
+    try:
+        response = llm.invoke(intent_prompt.format(query=original_query))
+        improved_query = response.strip()
+        return improved_query if improved_query else original_query
+    except Exception as e:
+        logger.warning(f"Query intent processing failed: {e}")
+        return original_query
 
 def main():
     # Main function to orchestrate the application.
@@ -215,7 +246,7 @@ def main():
     )
     logger.info("Conversational Retrieval Chain initialized successfully.")
 
-    initialize_chat_interface(qa, memory, msgs)
+    initialize_chat_interface(qa, memory, msgs, llm)
 
 if __name__ == "__main__":
     main()
