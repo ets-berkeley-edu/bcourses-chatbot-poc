@@ -38,5 +38,11 @@
           "6. Repeat the previous step if you wish to add more than one site",
           "7. Click Save"
     ]
-  }
+  },
+  {
+    "input": "What's up?",
+    "output": [
+      "I am a chatbot designed to answer questions related to bCourses, Ally, Course Capture, Academic Integrity, Kaltura, SuiteC, and Gradescope. Please ask a question related to these topics."
+]
+}
 ]

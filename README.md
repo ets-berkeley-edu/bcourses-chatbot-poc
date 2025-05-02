@@ -35,3 +35,15 @@ export APP_LOCAL_CONFIGS=~/Volumes/XYZ/bcourses_chatbot_poc_config
 ```
 streamlit run app/main.py
 ```
+
+### Testing
+Set your environment variables for Langsmith
+```
+export LANGSMITH_TRACING=true  
+export LANGSMITH_ENDPOINT="https://api.smith.langchain.com"   
+export LANGSMITH_API_KEY="your_api_key"
+```
+Then run the test script(s):
+```
+python scripts/run_evaluation.py --dataset [data_set_name]
+```
